@@ -1,0 +1,444 @@
+/* Width itself is set directly in JS (ManagerModal's layout effects, via
+ * findModalDialogElement() - see index.tsx and INVESTIGATION.md Part 6),
+ * targeting the dialog box by ARIA role rather than depending on this
+ * className being forwarded by <Modal>. These bounds are a secondary safety
+ * net in case that JS ever runs against an element found only through the
+ * className fallback. */
+.vc-gif-folders-modal-root {
+    /* Mirrors minWidthForColumns(1) in index.tsx (TILE_MIN_PX + padding +
+     * CHROME_OVERHEAD_PX) - keep these in sync if TILE_MIN_PX changes. */
+    min-width: 462px;
+    max-width: 96vw;
+    min-height: 300px;
+    max-height: 92vh;
+}
+
+/* Real left/right drag handles, injected as direct children of the dialog box
+ * by ManagerModal's resize-handles effect (not part of this plugin's normal
+ * JSX tree, since the dialog box itself lives outside what this plugin
+ * renders as Modal's children). CSS's native `resize` property only offers a
+ * single browser-drawn grab point in the bottom-right corner - these give an
+ * actual grabbable strip on either side instead, matching what "drag the
+ * window's sides" usually means. Sit flush inside the box's own edge (not
+ * offset outside it) in case the dialog itself clips overflow, which would
+ * otherwise hide a protruding handle's grabbable area. Transparent until
+ * hovered/dragged, so they don't add visual clutter the rest of the time. */
+.vc-gif-folders-resize-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 10px;
+    cursor: ew-resize;
+    z-index: 50;
+    background: transparent;
+    touch-action: none;
+}
+
+.vc-gif-folders-resize-handle:hover,
+.vc-gif-folders-resize-handle:active {
+    background: var(--brand-500);
+    opacity: 0.5;
+}
+
+.vc-gif-folders-resize-handle-left {
+    left: 0;
+}
+
+.vc-gif-folders-resize-handle-right {
+    right: 0;
+}
+
+/* Top/bottom height handles - same idea as the left/right width handles
+ * above, rotated 90 degrees (a horizontal strip spanning the box's width,
+ * instead of a vertical strip spanning its height). Kept as a separate base
+ * class rather than reusing .vc-gif-folders-resize-handle since the two
+ * orientations need opposite fixed/auto sizing (height:10px + left/right:0
+ * here, vs width:10px + top/bottom:0 there). */
+.vc-gif-folders-resize-handle-horizontal {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 10px;
+    cursor: ns-resize;
+    z-index: 50;
+    background: transparent;
+    touch-action: none;
+}
+
+.vc-gif-folders-resize-handle-horizontal:hover,
+.vc-gif-folders-resize-handle-horizontal:active {
+    background: var(--brand-500);
+    opacity: 0.5;
+}
+
+.vc-gif-folders-resize-handle-top {
+    top: 0;
+}
+
+.vc-gif-folders-resize-handle-bottom {
+    bottom: 0;
+}
+
+/* Chat-bar button icon swap (see GifFoldersIcon / GifFoldersBananaIcon /
+ * GifFoldersChatBarIcon in index.tsx). Both icons are always mounted, stacked
+ * exactly on top of each other via this positioning context, gorilla visible
+ * by default. "vc-chatbar-button" is Vencord's own marker class on every
+ * chat-bar button's outer wrapper (see ChatBarButton in @api/ChatButtons) -
+ * hovering anywhere within our button (icon, surrounding padding, etc.) sets
+ * :hover on that ancestor, which is what actually drives the cross-fade. */
+.vc-gif-folders-chatbar-icon-swap {
+    position: relative;
+    width: 24px;
+    height: 24px;
+}
+
+.vc-gif-folders-icon-gorilla,
+.vc-gif-folders-icon-banana {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transition: opacity 0.1s ease;
+}
+
+.vc-gif-folders-icon-banana {
+    opacity: 0;
+}
+
+.vc-chatbar-button:hover .vc-gif-folders-icon-gorilla {
+    opacity: 0;
+}
+
+.vc-chatbar-button:hover .vc-gif-folders-icon-banana {
+    opacity: 1;
+}
+
+.vc-gif-folders-icon-text {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    line-height: 1;
+}
+
+.vc-gif-folders-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 16px 0;
+    position: relative;
+}
+
+.vc-gif-folders-search-row > div:first-child {
+    flex-grow: 1;
+}
+
+.vc-gif-folders-search-clear {
+    position: absolute;
+    right: 24px;
+    top: 50%;
+    /* Offset = paddingTop / 2, so this stays centered on the input rather
+     * than the row - matches .vc-gif-folders-search-row's own 2px top
+     * padding above. If that padding ever changes again, this needs to
+     * become (that new value) / 2 to stay aligned. */
+    transform: translateY(calc(-50% + 1px));
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    line-height: 1;
+    user-select: none;
+}
+
+.vc-gif-folders-search-clear:hover {
+    color: var(--text-default);
+}
+
+.vc-gif-folders-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 16px 16px 0;
+}
+
+.vc-gif-folders-tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: var(--background-secondary);
+    color: var(--text-default);
+    cursor: pointer;
+    font-size: 14px;
+    user-select: none;
+}
+
+.vc-gif-folders-tab:hover {
+    background: var(--background-secondary-alt);
+}
+
+.vc-gif-folders-tab-active {
+    background: var(--brand-500);
+    color: var(--white-500);
+}
+
+.vc-gif-folders-tab-count {
+    opacity: 0.7;
+    font-size: 12px;
+}
+
+.vc-gif-folders-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 16px 0;
+    flex-wrap: wrap;
+}
+
+.vc-gif-folders-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--vc-gif-folders-cols, 3), minmax(80px, 1fr));
+    gap: 10px;
+    /* Right padding is wider than the other three sides on purpose - this
+     * grid's own vertical scrollbar (overflow-y: auto below) draws inside
+     * this padding, and needs enough of it to clear the 10px-wide right-edge
+     * resize handle (see the drag handles effect in ManagerModal) sitting at
+     * the dialog's actual right edge, or the two visually overlap. */
+    padding: 12px 24px 16px 16px;
+    max-height: 420px;
+    min-height: 170px;
+    overflow-y: auto;
+    /* Now the only scrollbar left in the modal (tightenModalChrome in
+     * index.tsx disables the redundant one Discord's own content wrapper
+     * otherwise grows alongside this) - styled to match Discord's own native
+     * thin scrollbar rather than the browser default, using Discord's own
+     * theme variables so it tracks light/dark mode and any custom theme
+     * automatically instead of a hardcoded color. scrollbar-color/-width
+     * cover Firefox; ::-webkit-scrollbar covers Chromium, which is what
+     * Discord's desktop app actually renders with. */
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thin-thumb) var(--scrollbar-thin-track);
+}
+
+.vc-gif-folders-grid::-webkit-scrollbar {
+    width: 8px;
+}
+
+.vc-gif-folders-grid::-webkit-scrollbar-track {
+    background: var(--scrollbar-thin-track);
+}
+
+.vc-gif-folders-grid::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thin-thumb);
+    border-radius: 4px;
+}
+
+/* Free Resize mode (see the "Window Width" settings group): the column count
+ * is no longer fixed by a setting - it's however many minmax(<floor>, 1fr)
+ * tiles fit in whatever width the window has been manually dragged to. The
+ * floor itself is also configurable now (the "Minimum GIF Size" slider next
+ * to Free Resize) - --vc-gif-folders-tile-min is set inline by index.tsx's
+ * ManagerModal on the grid element itself, so this rule just reads it, with
+ * 80px as a fallback for the (normally unreachable) case where that inline
+ * style is somehow missing. Same specificity as the base rule above (one
+ * class each), so source order alone makes this win when both classes are
+ * present on the same element. */
+.vc-gif-folders-grid-free-resize {
+    grid-template-columns: repeat(auto-fill, minmax(var(--vc-gif-folders-tile-min, 80px), 1fr));
+}
+
+.vc-gif-folders-tile {
+    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--background-secondary);
+    aspect-ratio: 1 / 1;
+    /* Without this, a click-and-drag gesture competes with the browser's own
+       native text/content selection - which shows its own gray selection
+       highlight overlay and can delay or interfere with the drag-to-reorder
+       pointer events below from registering promptly. */
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+}
+
+.vc-gif-folders-tile-dragging {
+    outline: 3px dashed orange;
+    outline-offset: -3px;
+    transform: scale(0.96);
+    transition: transform 0.1s ease;
+}
+
+.vc-gif-folders-tile-drop-target {
+    outline: 3px solid var(--brand-500);
+    outline-offset: -3px;
+}
+
+.vc-gif-folders-tile-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    cursor: pointer;
+    display: block;
+    opacity: 0;
+    background: linear-gradient(
+        100deg,
+        var(--background-secondary) 30%,
+        var(--background-secondary-alt) 50%,
+        var(--background-secondary) 70%
+    );
+    background-size: 200% 100%;
+    animation: vc-gif-folders-shimmer 1.4s ease-in-out infinite;
+    transition: opacity 0.15s ease;
+}
+
+.vc-gif-folders-tile-loaded {
+    opacity: 1;
+    animation: none;
+    background: none;
+}
+
+@keyframes vc-gif-folders-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.vc-gif-folders-tile-broken {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--text-muted);
+    text-align: center;
+    font-size: 11px;
+    padding: 8px;
+    cursor: pointer;
+    background: var(--background-secondary);
+}
+
+.vc-gif-folders-tile-broken:hover {
+    color: var(--text-default);
+}
+
+.vc-gif-folders-tile-name {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 4px 6px;
+    font-size: 11px;
+    color: #fff;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+    pointer-events: none;
+}
+
+.vc-gif-folders-tile:hover .vc-gif-folders-tile-name {
+    opacity: 1;
+}
+
+.vc-gif-folders-tile-badge {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 1;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.65);
+    pointer-events: none;
+    max-width: calc(100% - 36px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.vc-gif-folders-tile-delete {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+}
+
+.vc-gif-folders-tile:hover .vc-gif-folders-tile-delete {
+    opacity: 1;
+}
+
+.vc-gif-folders-tile-delete:hover {
+    background: var(--button-danger-background);
+}
+
+/* The Settings button, relocated next to Discord's own close ("X") button via
+ * a portal - see the settingsPortalTarget effect in ManagerModal and
+ * INVESTIGATION.md Part 8. wrapper is just a plain positioning slot inserted
+ * into Discord's own header; button is a real <button>, reset to a plain icon
+ * button and styled with Discord's standard interactive-element variables so
+ * it reads as roughly native next to the close button rather than looking
+ * like a foreign element bolted on. */
+.vc-gif-folders-header-settings-wrapper {
+    display: inline-flex;
+    align-items: center;
+    /* Without a height to center within, this wrapper is only ever as tall as
+     * its own 34px button - if the row it's inserted into (alongside the
+     * close button) is taller than that, it ends up sitting higher than its
+     * siblings instead of level with them. align-self/height cover a flex
+     * parent; vertical-align covers a plain inline-flow parent - covering
+     * both since which one actually applies here isn't confirmed. */
+    align-self: stretch;
+    height: 100%;
+    vertical-align: middle;
+}
+
+.vc-gif-folders-header-settings-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    /* Nudges this down to sit flush with Discord's own Close ("X") button
+     * beside it - both are nominally center-aligned in the same row, but
+     * ended up slightly offset in practice once both were enlarged (see
+     * tightenModalChrome's own comment on the X button). Empirical, from
+     * direct visual feedback rather than a measured cause - upped from an
+     * initial 5px to 10px after the first pass wasn't enough. */
+    margin-top: 10px;
+    margin-right: 8px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--interactive-normal);
+    cursor: pointer;
+}
+
+.vc-gif-folders-header-settings-button:hover {
+    color: var(--interactive-hover);
+    background: var(--background-modifier-hover);
+}
+
+/* Discord's own modal chrome (header/footer padding, footer button height)
+ * is handled directly in index.tsx via tightenModalChrome instead of a CSS
+ * rule here - see that function's own comment for why: the
+ * .vc-gif-folders-modal-root class this plugin passes to Modal never
+ * actually lands on anything in the live DOM, confirmed live, so nothing
+ * scoped under it here could ever have matched. */
