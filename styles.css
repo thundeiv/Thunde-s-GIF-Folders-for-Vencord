@@ -425,15 +425,51 @@
     margin-right: 8px;
     padding: 0;
     border: none;
-    border-radius: 4px;
+    /* Was 4px (a subtle rounded-square hover) - Discord's own icon buttons,
+     * including the "X" right next to this one, use a fully circular hover
+     * shape, which reads as a much more noticeable "light up" than a barely-
+     * rounded square at the same background color does. The hover rule below
+     * was already present and technically working before this - this is
+     * about making it visible enough to actually notice, not about it being
+     * broken. */
+    border-radius: 50%;
     background: none;
     color: var(--interactive-normal);
     cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .vc-gif-folders-header-settings-button:hover {
-    color: var(--interactive-hover);
-    background: var(--background-modifier-hover);
+    /* Not var(--background-modifier-hover)/var(--interactive-hover) - both
+     * confirmed live, via getComputedStyle, to resolve to an empty string
+     * for *both* this button and Discord's own working "X" button next to
+     * it. Those classic Discord theming variables simply don't exist in
+     * whatever this build's current design system is (the "Mana" system -
+     * see the button_a22cb0/md_a22cb0-style hashed classes noted elsewhere
+     * in this file). !important alone didn't help, because the problem was
+     * never a losing specificity fight - it was an unresolved variable, and
+     * no priority can make an invalid value valid.
+     *
+     * The X button's own hover effect was then hunted for directly:
+     * exhaustively diffed every descendant, every ::before/::after
+     * pseudo-element, and four levels of ancestors, across background,
+     * background-image, box-shadow, filter, opacity, outline, border, fill,
+     * and transform, before and after a real hover - confirmed live, nothing
+     * anywhere changed. Whatever Discord's own mechanism actually is, it
+     * isn't visible through computed-style diffing at all (possibly a
+     * canvas-rendered effect, or something timing-based our snapshot missed
+     * mid-frame) - not worth chasing further. This is a plain, hardcoded,
+     * theme-agnostic hover instead: good enough to be clearly visible,
+     * without depending on reverse-engineering an unusually well-hidden
+     * mechanism, or on a CSS variable that isn't even there. Only the
+     * background is hardcoded, not color - a white icon-on-white-background
+     * risk in a light theme isn't worth taking just to also tint the icon,
+     * when the background alone already gives clear visible feedback. */
+    background: rgba(255, 255, 255, 0.1) !important;
+}
+
+.vc-gif-folders-header-settings-button:active {
+    background: rgba(255, 255, 255, 0.15) !important;
 }
 
 /* Discord's own modal chrome (header/footer padding, footer button height)
