@@ -18,3 +18,7 @@ I want to share this plugin with the world hoping that a really skilled develope
 
 Minor bugs exist, but they are not very annoying and i hope i'll eventually fix them. For example rarely, some mp4 saved files that you'll send, will be sent with a blue link above the video. You can re-upload it and re-save it to a folder and this gets fixed.
 Also very rarely, when you save a gif/image/mp4 to a folder, discord crashes. I suspect it's some memory issue but this is happening around once a week so it's a non-issue for most people.
+<img width="1763" height="101" alt="image" src="https://github.com/user-attachments/assets/2f671851-9fc4-4be0-a553-2af7b03e5666" />
+<img width="1706" height="1263" alt="image" src="https://github.com/user-attachments/assets/9312ce12-6ee8-4511-804a-0ef885a72249" />
+<img width="423" height="501" alt="image" src="https://github.com/user-attachments/assets/7622fb21-db0a-4c9c-81e1-5f0efe96a74f" />
+<img width="803" height="543" alt="image" src="https://github.com/user-attachments/assets/33058997-f0db-41a0-b7ca-b6fba4866f1d" />
