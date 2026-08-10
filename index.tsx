@@ -605,6 +605,27 @@ async function reorderGifInFolder(folder: string, draggedId: string, targetId: s
 }
 
 /**
+ * Moves the dragged folder to take the dropped-on folder's position, shifting
+ * the rest - same semantics as reorderGifInFolder above. Folder order is just
+ * Object.keys(cache)'s insertion order (cache is a plain object, not an
+ * array), and a JS object has no way to reorder its own existing keys in
+ * place, so this rebuilds `cache` from scratch, key by key, in the new order.
+ */
+async function reorderFolder(draggedName: string, targetName: string) {
+    if (draggedName === targetName || !cache[draggedName] || !cache[targetName]) return;
+    const names = Object.keys(cache);
+    const fromIndex = names.indexOf(draggedName);
+    const toIndex = names.indexOf(targetName);
+    if (fromIndex === -1 || toIndex === -1) return;
+    const [moved] = names.splice(fromIndex, 1);
+    names.splice(toIndex, 0, moved);
+    const reordered: FolderMap = {};
+    for (const name of names) reordered[name] = cache[name];
+    cache = reordered;
+    await persist();
+}
+
+/**
  * Discord's own signed CDN links expire (they carry an ex=/is=/hm= signature with a
  * preset expiry), and once expired they 404 - even though the underlying attachment
  * is still there, since Discord's client transparently reissues a fresh signature
@@ -3592,6 +3613,73 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
         };
     }, []);
 
+    // Drag-to-reorder for the folder tabs themselves - see reorderFolder.
+    // Exact same plain-pointer-event approach as the GIF tile reordering just
+    // above (and for the same reason: Discord's own global drag listeners
+    // interfere with the native Drag and Drop API), just tracking folder
+    // names via data-folder-name instead of GIF ids via data-gif-id. Kept as
+    // fully separate state/refs/effect from the tile version above rather
+    // than sharing one - each only ever looks at its own ref, so having both
+    // mounted at once can't cross-fire, and it keeps this block copy-pastable
+    // if the tile version's logic ever needs to diverge later.
+    const [draggedFolder, setDraggedFolder] = useState<string | null>(null);
+    const [dropTargetFolder, setDropTargetFolder] = useState<string | null>(null);
+    const folderDragStartRef = React.useRef<{ x: number; y: number; name: string; } | null>(null);
+    const isFolderDraggingRef = React.useRef(false);
+    const overFolderRef = React.useRef<string | null>(null);
+
+    function handleFolderTabPointerDown(e: React.PointerEvent) {
+        if (e.button !== 0) return;
+        const name = e.currentTarget.getAttribute("data-folder-name");
+        if (!name) return;
+        // Same belt-and-suspenders reasoning as handleTilePointerDown above.
+        e.preventDefault();
+        folderDragStartRef.current = { x: e.clientX, y: e.clientY, name };
+    }
+
+    React.useEffect(() => {
+        function onPointerMove(e: PointerEvent) {
+            const start = folderDragStartRef.current;
+            if (!start) return;
+
+            if (!isFolderDraggingRef.current) {
+                const dx = e.clientX - start.x;
+                const dy = e.clientY - start.y;
+                if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+                isFolderDraggingRef.current = true;
+                setDraggedFolder(start.name);
+            }
+
+            const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+            const tabEl = el?.closest<HTMLElement>("[data-folder-name]");
+            const overName = tabEl?.getAttribute("data-folder-name") ?? null;
+            const resolved = overName && overName !== start.name ? overName : null;
+            overFolderRef.current = resolved;
+            setDropTargetFolder(resolved);
+        }
+
+        function endDrag() {
+            const start = folderDragStartRef.current;
+            if (start && isFolderDraggingRef.current && overFolderRef.current) {
+                void reorderFolder(start.name, overFolderRef.current);
+            }
+            folderDragStartRef.current = null;
+            isFolderDraggingRef.current = false;
+            overFolderRef.current = null;
+            setDraggedFolder(null);
+            setDropTargetFolder(null);
+        }
+
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", endDrag);
+        window.addEventListener("pointercancel", endDrag);
+        return () => {
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", endDrag);
+            window.removeEventListener("pointercancel", endDrag);
+        };
+    }, []);
+
     function insert(entry: GifEntry, instant = false) {
         const channel = getCurrentChannel();
         if (!channel) {
@@ -3763,7 +3851,14 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
                     {folderNames.map(name => (
                         <div
                             key={name}
-                            className={"vc-gif-folders-tab" + (name === currentFolder ? " vc-gif-folders-tab-active" : "")}
+                            className={
+                                "vc-gif-folders-tab"
+                                + (name === currentFolder ? " vc-gif-folders-tab-active" : "")
+                                + (draggedFolder === name ? " vc-gif-folders-tab-dragging" : "")
+                                + (dropTargetFolder === name ? " vc-gif-folders-tab-drop-target" : "")
+                            }
+                            data-folder-name={name}
+                            onPointerDown={handleFolderTabPointerDown}
                             onClick={() => setActive(name)}
                         >
                             {name} <span className="vc-gif-folders-tab-count">{cache[name].length}</span>

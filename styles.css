@@ -172,6 +172,10 @@
     cursor: pointer;
     font-size: 14px;
     user-select: none;
+    /* Same reasoning as .vc-gif-folders-tile below - competes with the
+       drag-to-reorder pointer tracking otherwise. */
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
 }
 
 .vc-gif-folders-tab:hover {
@@ -181,6 +185,18 @@
 .vc-gif-folders-tab-active {
     background: var(--brand-500);
     color: var(--white-500);
+}
+
+.vc-gif-folders-tab-dragging {
+    outline: 3px dashed orange;
+    outline-offset: -3px;
+    transform: scale(0.96);
+    transition: transform 0.1s ease;
+}
+
+.vc-gif-folders-tab-drop-target {
+    outline: 3px solid var(--brand-500);
+    outline-offset: -3px;
 }
 
 .vc-gif-folders-tab-count {
