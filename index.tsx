@@ -193,6 +193,14 @@ const MEDIA_CACHE_KEY = "GifFolders_media_cache_v2"; // legacy single-blob key -
 const MEDIA_CACHE_PREFIX = "GifFolders_media_cache_entry_v1:";
 const REMEMBERED_WIDTH_KEY = "GifFolders_remembered_width_v1";
 const REMEMBERED_HEIGHT_KEY = "GifFolders_remembered_height_v1";
+// See INVESTIGATION.md Part 29 - separate from REMEMBERED_HEIGHT_KEY (the
+// dialog's own height) on purpose. This remembers the grid's own precisely
+// *measured* content-height from the last successful settleGridHeight, so a
+// future open can start from a real, previously-confirmed-correct value on
+// the very first paint, instead of a same-frame formula guess that's only
+// ever approximate (INVESTIGATION.md Part 20) and then visibly corrects a
+// moment later.
+const REMEMBERED_GRID_CONTENT_HEIGHT_KEY = "GifFolders_remembered_grid_content_height_v1";
 const DEFAULT_FOLDERS = ["Favorites 1", "Favorites 2"];
 const RESTART_INTERVAL_MS = 4000;
 // Mirrors native.ts's own MAX_BYTES - kept as two separate constants since
@@ -226,6 +234,10 @@ const touchedThisSession = new Set<string>();
 // already open.
 let rememberedWidth: number | null = null;
 let rememberedHeight: number | null = null;
+// See REMEMBERED_GRID_CONTENT_HEIGHT_KEY's own comment and
+// INVESTIGATION.md Part 29 - the grid's own last precisely-*measured*
+// content-height (from settleGridHeight), not derived from rememberedHeight.
+let rememberedGridContentHeight: number | null = null;
 let ready = false;
 const listeners = new Set<() => void>();
 const inFlightFetches = new Map<string, Promise<string | null>>();
@@ -400,6 +412,14 @@ async function loadCache() {
         rememberedHeight = null;
     }
 
+    try {
+        const storedGridContentHeight = await DataStore.get<number>(REMEMBERED_GRID_CONTENT_HEIGHT_KEY);
+        rememberedGridContentHeight = typeof storedGridContentHeight === "number" && storedGridContentHeight > 0 ? storedGridContentHeight : null;
+    } catch (e) {
+        logger.error("Failed to load GIF Folders remembered grid content height from DataStore", e);
+        rememberedGridContentHeight = null;
+    }
+
     ready = true;
     notify();
 }
@@ -516,6 +536,22 @@ async function persistRememberedHeight(height: number) {
         await DataStore.set(REMEMBERED_HEIGHT_KEY, height);
     } catch (e) {
         logger.error("Failed to save GIF Folders remembered height to DataStore", e);
+    }
+}
+
+/**
+ * See REMEMBERED_GRID_CONTENT_HEIGHT_KEY and INVESTIGATION.md Part 29.
+ * Called from settleGridHeight's own finish() every time it successfully
+ * computes a precise value - not just on drag-release like
+ * persistRememberedHeight, since a plain modal-open settle (no drag
+ * involved) is exactly the case this exists to improve on the *next* open.
+ */
+async function persistRememberedGridContentHeight(contentHeightPx: number) {
+    rememberedGridContentHeight = contentHeightPx;
+    try {
+        await DataStore.set(REMEMBERED_GRID_CONTENT_HEIGHT_KEY, contentHeightPx);
+    } catch (e) {
+        logger.error("Failed to save GIF Folders remembered grid content height to DataStore", e);
     }
 }
 
@@ -1396,7 +1432,8 @@ async function cacheGif(url: string, bypassCircuit = false): Promise<string | nu
                 logger.warn(
                     `Local caching looks unavailable in this Discord client (${FETCH_FAILURE_THRESHOLD} downloads in a row failed, across different domains). ` +
                     "GIFs will still display and play from their live links; pausing further cache attempts for the rest of this session to stop spamming the console. " +
-                    "Tap a tile's \"Couldn't load - tap to retry\" (if any appear) to force a single fresh attempt.",
+                    "Tap a tile's \"Couldn't load - tap to retry\" (if any appear) to force a fresh attempt - " +
+                    "tapping any one of them also retries every other tile stuck the same way, a few at a time.",
                 );
             } else if (!fetchCircuitOpen) {
                 logger.warn("Couldn't cache GIF (this is often just a CORS restriction - the GIF will still display, just won't be cached locally)", url, e);
@@ -2264,6 +2301,255 @@ function setGridMaxHeight(maxHeightPx: number) {
 }
 
 /**
+ * Same as setGridMaxHeight, but keeps the grid's own scroll position sane
+ * across the change - see INVESTIGATION.md Part 26. Whenever max-height
+ * changes, the grid's clientHeight changes with it, and the browser
+ * automatically clamps scrollTop down if it would otherwise scroll past the
+ * (new, shorter) end of the content - completely normal scroll behavior,
+ * but it fires on *every* max-height change this file makes, including
+ * settleGridHeight's own deliberately oversized probe step (see its
+ * comment). Once clientHeight shrinks back down afterward, scrollTop does
+ * NOT un-clamp back to where it was - browsers only ever pull scrollTop
+ * down to stay legal, never push it back up once room reopens - so a
+ * person scrolled to the bottom before a settle would land noticeably
+ * short of the bottom after one, confirmed via a real repro.
+ *
+ * Records whether the grid was scrolled to its bottom (or a specific
+ * scrollTop, if not) before the change, and restores that intent
+ * afterward - "was at the bottom" re-scrolls to the *new* bottom (which
+ * may differ slightly from the old one) rather than replaying a stale
+ * pixel value that may no longer mean the same thing.
+ */
+/**
+ * Creates a temporary, invisible stand-in for the grid - a plain div
+ * matching just enough of its box model (box-sizing, padding) to make
+ * contentWrapper react the same way it would to the real grid being that
+ * tall - inserted as the grid's next sibling. See settleGridHeight's own
+ * comment and INVESTIGATION.md Part 27 for why: contentWrapper needs
+ * *something* oversized to react to in order to reveal its true ceiling
+ * (Part 23), but that something no longer has to be the real, visible grid
+ * itself. The real grid's own tiles never move or disappear, because the
+ * real grid's own size is never touched until the final, correct value is
+ * already known - only this disposable probe does the oversized dance, and
+ * it's invisible (`visibility: hidden`) the entire time by design, so
+ * there's nothing to flash.
+ *
+ * Caller is responsible for removing it (`.remove()`) once done measuring.
+ */
+function createSizingProbe(grid: HTMLElement, contentHeightPx: number): HTMLElement {
+    const probe = document.createElement("div");
+    probe.setAttribute("data-vc-gif-folders-probe", "true");
+    probe.setAttribute("aria-hidden", "true");
+    const gridStyles = getComputedStyle(grid);
+    probe.style.boxSizing = gridStyles.boxSizing;
+    probe.style.paddingTop = gridStyles.paddingTop;
+    probe.style.paddingBottom = gridStyles.paddingBottom;
+    probe.style.margin = "0";
+    probe.style.visibility = "hidden";
+    probe.style.height = `${Math.round(contentHeightPx)}px`;
+    grid.insertAdjacentElement("afterend", probe);
+    return probe;
+}
+
+/**
+ * Root-cause fix for INVESTIGATION.md Part 20 (the bottom row + scrollbar
+ * clipping bug) - live-measures how much room is actually available for the
+ * grid, instead of assuming it via a delta formula.
+ *
+ * The delta formula this replaces - `GRID_DEFAULT_MAX_HEIGHT_PX + (targetHeight
+ * - baseModalHeightRef.current)` - assumed dialog-height growth always hands
+ * the grid the same number of extra px 1:1. Confirmed via a real console dump
+ * (see INVESTIGATION.md Part 20) that this doesn't hold: the modal's content
+ * wrapper (Discord's own body/scroller element between header and footer, set
+ * to overflow:hidden by tightenModalChrome to kill a redundant second
+ * scrollbar) has its own clientHeight, and the delta formula has no way to
+ * know whether that clientHeight actually grew by the same amount the dialog
+ * did. In the confirmed repro it didn't - the grid ended up 56px taller than
+ * the wrapper had room for, and since the wrapper's overflow is hidden, that
+ * 56px (bottom row + the grid's own scrollbar riding along it) was silently
+ * clipped regardless of the grid's own internal scrollTop.
+ *
+ * This sidesteps the whole class of "assumed a fixed relationship that turned
+ * out not to hold" bug by not assuming anything - it measures the wrapper's
+ * real bottom edge and the grid's real top edge directly, right now, and
+ * returns exactly how much box height (content + this plugin's own padding)
+ * the grid can occupy without exceeding that. contentWrapper is re-derived
+ * with the same walk tightenModalChrome uses, independently rather than
+ * shared, for the same reason the diagnostics above do that: a bug in
+ * tightenModalChrome's own logic shouldn't also silently break this.
+ *
+ * Returns null if the grid or its content wrapper aren't in the DOM right
+ * now (modal not open, or not on a view that renders a grid) - callers fall
+ * back to the old delta formula in that case rather than fail outright.
+ */
+function computeAvailableGridContentHeight(dialog: HTMLElement): number | null {
+    const grid = document.querySelector<HTMLElement>(".vc-gif-folders-grid");
+    if (!grid) return null;
+
+    let contentWrapper: HTMLElement | null = document.querySelector<HTMLElement>(".vc-gif-folders-search-row");
+    while (contentWrapper && contentWrapper.parentElement && contentWrapper.parentElement !== dialog) {
+        contentWrapper = contentWrapper.parentElement;
+    }
+    if (!contentWrapper) return null;
+
+    const wrapperBottom = contentWrapper.getBoundingClientRect().bottom;
+    const gridTop = grid.getBoundingClientRect().top;
+    const gridStyles = getComputedStyle(grid);
+    const verticalPadding = (parseFloat(gridStyles.paddingTop) || 0) + (parseFloat(gridStyles.paddingBottom) || 0);
+
+    // gridTop is only affected by whatever sits above the grid in normal
+    // document flow (search row, tabs, toolbar) - contentWrapper is a plain
+    // display:block box (confirmed via the diagnostic dump), not a flex/grid
+    // container whose own children's sizes could feed back into each
+    // other's position, so this is safe to measure in one pass rather than
+    // needing to re-measure after applying the result. The sizing probe
+    // (see createSizingProbe) sits *after* the grid in the DOM, so its
+    // presence doesn't affect gridTop either.
+    const availableBoxHeight = wrapperBottom - gridTop;
+    // grid's own CSS max-height applies to the content box only (confirmed
+    // content-box via the diagnostic dump), so subtract padding to convert
+    // from "available rendered box height" to "the number to hand
+    // setGridMaxHeight".
+    return Math.max(GRID_MIN_MAX_HEIGHT_PX, Math.round(availableBoxHeight - verticalPadding));
+}
+
+/**
+ * Grows a temporary, invisible probe (not the grid itself - see
+ * createSizingProbe) to a deliberately oversized value, waits for
+ * contentWrapper to stop changing size, then sets the real grid's final
+ * precise max-height once - see INVESTIGATION.md Part 23 for the real repro
+ * and numbers that showed why this replaced Part 22's continuous
+ * ResizeObserver-based correction, and Part 27 for why the probe is a
+ * separate element rather than the grid itself.
+ *
+ * contentWrapper (Discord's own body/scroller wrapper) turns out to be
+ * CONTENT-DRIVEN - it shrinks to fit whatever's inside it, up to some
+ * ceiling from its own ancestor - not simply a fixed space handed down that
+ * the grid can measure and fill. computeAvailableGridContentHeight, called
+ * directly against contentWrapper's *current* bottom edge, is only
+ * trustworthy when contentWrapper is actually being clamped by that ceiling
+ * (content >= ceiling). If a correction ever undershoots even slightly,
+ * contentWrapper shrinks to match (being content-driven), and the next
+ * correction reads that now-smaller size as if it were the true ceiling and
+ * shrinks the grid to match it too - confirmed via a real repro as a
+ * genuine downward spiral, worse with every additional resize interaction,
+ * not just a one-off measurement error.
+ *
+ * Deliberately oversizing *something* inside contentWrapper first
+ * guarantees content exceeds the ceiling, forcing contentWrapper into its
+ * clamped regime, where reading its bottom edge is actually meaningful -
+ * then computeAvailableGridContentHeight gets called once, and its result
+ * gets set once, as a single deliberate step rather than an ongoing
+ * automatic reaction to every resize (which is what could spiral in the
+ * first place). Originally that "something" was the real grid itself
+ * (Part 23), hidden via visibility:hidden to avoid a visible flash while
+ * oversized (Part 25) - Part 27 replaced it with a disposable probe
+ * element instead, so the real grid's own size only ever changes once,
+ * directly to its final correct value, and its scroll position never has
+ * to survive passing through an oversized intermediate state at all.
+ * `targetDialogHeight` is passed in rather than re-read from the dialog
+ * here specifically because the dialog itself may not have finished
+ * reacting to a height change yet either - the value the caller just told
+ * the dialog to become is the reliable one, not whatever a live read might
+ * catch mid-transition.
+ *
+ * "Wait for contentWrapper to stop changing" is itself done via a debounced
+ * ResizeObserver rather than a fixed delay, for the same reason Part 22
+ * moved off a fixed frame count in the first place: however long Discord's
+ * own reaction actually takes, this waits for actual quiet (200ms with no
+ * further size change) rather than guessing a number and risking being
+ * wrong again. A hard 1.5s ceiling exists only as a backstop against a
+ * contentWrapper that (for whatever reason) never goes quiet, so the probe
+ * can't be left in place indefinitely.
+ *
+ * Scroll position (INVESTIGATION.md Part 26, refined in Part 27): captured
+ * *once*, right here at the very top, before anything - probe included -
+ * has touched contentWrapper or the grid at all, and restored only once,
+ * at the very end, against that single captured value. Part 26's first
+ * attempt restored scroll around each individual max-height write instead,
+ * which broke for scroll positions close to (but not exactly at) the
+ * bottom: the oversized probe's own still-finite legal scrollTop range
+ * could silently re-clamp a "nearly at the bottom" position during the
+ * probe step, and that already-clamped value then got mistaken for the
+ * original intent by the time the final step ran. Capturing once up front,
+ * before the real grid's legal range ever changes, sidesteps that
+ * entirely - the real grid's clientHeight now only ever changes once
+ * (directly to its final value), so there's exactly one moment where the
+ * captured intent needs to still be legal, and by then the grid is back to
+ * (or already at) its correct, full-range size.
+ *
+ * Returns a cancel function - callers should invoke it from their own
+ * effect's cleanup (or before starting a replacement call), so this can't
+ * finish and write a value after the modal's closed or a newer resize has
+ * superseded it.
+ */
+function settleGridHeight(dialog: HTMLElement, targetDialogHeight: number): () => void {
+    const grid = document.querySelector<HTMLElement>(".vc-gif-folders-grid");
+    if (!grid) return () => {};
+
+    let contentWrapper: HTMLElement | null = document.querySelector<HTMLElement>(".vc-gif-folders-search-row");
+    while (contentWrapper && contentWrapper.parentElement && contentWrapper.parentElement !== dialog) {
+        contentWrapper = contentWrapper.parentElement;
+    }
+    if (!contentWrapper) return () => {};
+    const wrapperEl = contentWrapper;
+
+    const scrollTopBeforeSettle = grid.scrollTop;
+    const wasAtBottomBeforeSettle = scrollTopBeforeSettle >= grid.scrollHeight - grid.clientHeight - 1;
+
+    const probe = createSizingProbe(grid, targetDialogHeight);
+
+    let done = false;
+    let settleTimer = 0;
+    let maxWaitTimer = 0;
+
+    const finish = () => {
+        if (done) return;
+        done = true;
+        observer.disconnect();
+        window.clearTimeout(settleTimer);
+        window.clearTimeout(maxWaitTimer);
+        // Measure while the probe is still in place (it's what's currently
+        // holding contentWrapper open to its true ceiling) - removing it
+        // first would let contentWrapper immediately shrink back to fit
+        // only the still-unchanged real grid, reintroducing exactly the
+        // content-driven measurement problem Part 23 fixed.
+        const available = computeAvailableGridContentHeight(dialog);
+        probe.remove();
+        if (available !== null) {
+            setGridMaxHeight(available);
+            // See REMEMBERED_GRID_CONTENT_HEIGHT_KEY's own comment and
+            // INVESTIGATION.md Part 29 - this is the one place a real,
+            // precisely-measured value (as opposed to a formula guess) ever
+            // becomes available, so it's the only place worth persisting it
+            // from.
+            void persistRememberedGridContentHeight(available);
+        }
+        grid.scrollTop = wasAtBottomBeforeSettle
+            ? grid.scrollHeight - grid.clientHeight
+            : scrollTopBeforeSettle;
+    };
+
+    const observer = new ResizeObserver(() => {
+        window.clearTimeout(settleTimer);
+        settleTimer = window.setTimeout(finish, 200);
+    });
+    observer.observe(wrapperEl);
+    settleTimer = window.setTimeout(finish, 200);
+    maxWaitTimer = window.setTimeout(finish, 1500);
+
+    return () => {
+        if (done) return;
+        done = true;
+        observer.disconnect();
+        window.clearTimeout(settleTimer);
+        window.clearTimeout(maxWaitTimer);
+        probe.remove();
+    };
+}
+
+
+/**
  * Tightens Discord's own modal chrome around this plugin's content - the
  * header row (title + Discord's own Close "X" button, plus this plugin's own
  * portalled Settings button) is shrunk and its two icon buttons enlarged; the
@@ -2779,6 +3065,80 @@ function observeTileVisibility(root: Element, el: Element, onChange: (visible: b
     };
 }
 
+// ---------- Retry-all for tiles stuck on "Couldn't load" ----------
+//
+// Every tile currently showing "Couldn't load - tap to retry", keyed by entry.id
+// - not mediaSrc/hashUrl, since two different saved entries (even across two
+// different folders) can point at the same underlying URL and are still two
+// independently-broken *tiles*, each needing its own retry. A tile adds itself
+// the moment it enters the broken state and removes itself the moment it leaves
+// it, for any reason - see the registration effect on GifTile below. Only one
+// grid (the open folder, or search results) is ever mounted at a time (see
+// ManagerModal), so this never accumulates entries for a view the person has
+// since navigated away from - same shape of lifetime as sharedVisibilityObservers
+// just above.
+const brokenTileRetries = new Map<string, () => Promise<string | null>>();
+
+// Deliberately smaller than EXPORT_BATCH_SIZE (8 - see exportAllFoldersToDisk):
+// a batch here is a *forced* re-fetch (bypassCircuit) of files that just failed
+// to load at all, not files the export flow already expects to mostly be cache
+// hits, so it's worth staying more conservative about how much simultaneous work
+// (bytes in flight, base64 conversions - see cacheGif) this throws at the process
+// at once. Matches ensureCached's own existing concurrency default (4) for a
+// similar workload, without actually reusing ensureCached here: that helper
+// skips anything already cached and never bypasses the circuit breaker, both
+// wrong for retrying files that just failed. See INVESTIGATION.md Part 19.
+const RETRY_ALL_BATCH_SIZE = 4;
+
+let retryAllInProgress = false;
+
+async function retryOneBrokenTile(id: string) {
+    try {
+        await brokenTileRetries.get(id)?.();
+    } catch {
+        // A single tile failing to retry shouldn't derail the rest of the batch -
+        // it just stays on the "Couldn't load" placeholder, same as if this had
+        // been the only tile retried at all.
+    }
+}
+
+/**
+ * Fired from a single tile's "Couldn't load - tap to retry" button (see
+ * handleRetryClick on GifTile) - that tile has already retried itself by the
+ * time this runs (handleRetryClick calls retry() directly, unconditionally, so
+ * the tile someone actually tapped never waits on a batch). This handles every
+ * *other* tile currently stuck on the same message, a few at a time rather than
+ * all at once, so retrying a folder with a couple dozen dead links can't spike
+ * memory the way firing every retry simultaneously could. See INVESTIGATION.md
+ * Part 19 for the full writeup, including why this needed to be a real batch
+ * boundary (awaiting each slice before starting the next) rather than just a
+ * concurrency-limited pool like ensureCached.
+ *
+ * Re-reads the registry fresh for every tile - not a snapshot of retry functions
+ * taken once up front - so a tile that's already recovered or unmounted by the
+ * time its turn comes up (another click, a folder switch, a background refresh
+ * succeeding first) is skipped rather than retried pointlessly.
+ */
+async function retryAllOtherBrokenTiles(excludeId: string) {
+    if (retryAllInProgress) return;
+    const ids = Array.from(brokenTileRetries.keys()).filter(id => id !== excludeId);
+    if (ids.length === 0) return;
+
+    retryAllInProgress = true;
+    try {
+        let index = 0;
+        while (index < ids.length) {
+            const slice = ids.slice(index, index + RETRY_ALL_BATCH_SIZE);
+            index += slice.length;
+            // Awaited before the next slice starts - this is what actually bounds
+            // peak concurrency to RETRY_ALL_BATCH_SIZE, not just a cosmetic pause.
+            await Promise.all(slice.map(retryOneBrokenTile));
+        }
+    } finally {
+        retryAllInProgress = false;
+    }
+}
+
 function GifTile({ folder, entry, onInsert, folderBadge, reorderable, isDragging, isDropTarget, onTilePointerDown }: {
     folder: string;
     entry: GifEntry;
@@ -2926,7 +3286,37 @@ function GifTile({ folder, entry, onInsert, folderBadge, reorderable, isDragging
         // own cache of that specific failed request rather than actually hitting the
         // network again.
         setRestartTick(t => t + 1);
-        cacheGif(entry.mediaSrc, /* bypassCircuit */ true);
+        // Returned (not fired-and-forgotten) so retryAllOtherBrokenTiles can await
+        // it - that's what actually bounds how many of these run at once when a
+        // lot of tiles get retried together. onClick={handleRetryClick} below
+        // doesn't care about the return value either way.
+        return cacheGif(entry.mediaSrc, /* bypassCircuit */ true);
+    }
+
+    // Exposes this tile's retry() to retryAllOtherBrokenTiles (above), but only
+    // for as long as this tile is actually showing the "Couldn't load" placeholder
+    // - added the moment `broken` becomes true, removed the moment it stops being
+    // true for any reason (this retry succeeding, entry.mediaSrc changing out from
+    // under it via refreshEntryMediaUrl, which itself forces broken back to false -
+    // see the mount effect above - or unmounting outright). retry is a new
+    // function every render, but it's safe to leave out of this effect's own deps:
+    // entry.mediaSrc can't change without broken also going false first (see
+    // above), so the closure captured here can never actually go stale while it's
+    // still registered.
+    React.useEffect(() => {
+        if (!broken) return;
+        brokenTileRetries.set(entry.id, retry);
+        return () => { brokenTileRetries.delete(entry.id); };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [broken, entry.id]);
+
+    // The actual click handler for the "Couldn't load" placeholder below: retries
+    // this tile immediately and unconditionally (same as always), then separately
+    // kicks off a bounded, batched retry of every other tile currently stuck on
+    // the same message. See INVESTIGATION.md Part 19.
+    function handleRetryClick() {
+        retry();
+        void retryAllOtherBrokenTiles(entry.id);
     }
 
     // Shared by all three media branches below (video/canvas/img), which otherwise
@@ -3067,7 +3457,7 @@ function GifTile({ folder, entry, onInsert, folderBadge, reorderable, isDragging
                     <span>No preview — open original</span>
                 </div>
             ) : broken ? (
-                <div className="vc-gif-folders-tile-broken" role="button" onClick={retry}>
+                <div className="vc-gif-folders-tile-broken" role="button" onClick={handleRetryClick}>
                     <FolderIcon width={18} height={18} />
                     <span>Couldn't load — tap to retry</span>
                 </div>
@@ -3260,11 +3650,23 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
     // the width effect above, but simpler: there's no settings-driven value
     // (like gridColumns) that height ever needs to recompute against, so this
     // only ever needs to run once per open, not react to anything changing
-    // afterward. Also grows/shrinks .vc-gif-folders-grid's own max-height by
-    // the same amount the dialog itself differs from its natural, un-resized
-    // height - see GRID_MAXHEIGHT_STYLE_ID's comment for why - so reopening
-    // at a remembered height actually shows the right number of rows instead
-    // of just reserving blank space for them.
+    // afterward. Also grows/shrinks .vc-gif-folders-grid's own max-height to
+    // match - see GRID_MAXHEIGHT_STYLE_ID's comment for why - so reopening at
+    // a remembered height actually shows the right number of rows instead of
+    // just reserving blank space for them.
+    //
+    // The same-frame first-paint guess prefers rememberedGridContentHeight
+    // (a real, precisely-*measured* value from the last successful settle -
+    // see its own comment and INVESTIGATION.md Part 29) over the delta
+    // formula (see INVESTIGATION.md Part 20 for why that formula alone is
+    // only ever approximate - it doesn't know how tall the chrome above the
+    // grid currently happens to be). In the common case - nothing about the
+    // chrome has changed since last time - this makes the guess exactly
+    // right already, so settleGridHeight's own correction below finds
+    // nothing to change and there's no visible jump at all. The delta
+    // formula remains as a fallback for a case rememberedGridContentHeight
+    // can't cover: the very first open ever (or after clearing data), where
+    // no prior measurement exists yet to remember.
     React.useLayoutEffect(() => {
         const el = findModalDialogElement();
         if (!el) return;
@@ -3272,7 +3674,8 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
         if (rememberedHeight) {
             const targetHeight = Math.round(rememberedHeight);
             setDialogHeight(el, targetHeight);
-            setGridMaxHeight(GRID_DEFAULT_MAX_HEIGHT_PX + (targetHeight - baseModalHeightRef.current));
+            setGridMaxHeight(rememberedGridContentHeight ?? (GRID_DEFAULT_MAX_HEIGHT_PX + (targetHeight - baseModalHeightRef.current)));
+            return settleGridHeight(el, targetHeight);
         }
     }, []);
 
@@ -3342,6 +3745,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
         if (positionWasStatic) dialog.style.position = "relative";
 
         const cleanups: Array<() => void> = [];
+
         for (const edge of ["left", "right"] as const) {
             const handle = document.createElement("div");
             handle.className = `vc-gif-folders-resize-handle vc-gif-folders-resize-handle-${edge}`;
@@ -3394,19 +3798,57 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
         // see the height-apply-on-open effect above for that half). Without
         // this, the grid would stay capped at whatever max-height it already
         // had while the dialog around it visibly grew or shrank.
+        //
+        // pendingSettleCancel is shared across both handles (top and bottom
+        // can't both be mid-drag at once, but tracking it outside the loop
+        // means a second drag's settle cleanly supersedes an unfinished
+        // first one's, and the outer cleanup below can always cancel
+        // whatever's still pending when the modal closes) - see
+        // settleGridHeight's own comment, and INVESTIGATION.md Part 23, for
+        // why onPointerUp needs this rather than a live measurement or a
+        // persistent ResizeObserver.
+        let pendingSettleCancel: (() => void) | null = null;
         for (const edge of ["top", "bottom"] as const) {
             const handle = document.createElement("div");
             handle.className = `vc-gif-folders-resize-handle-horizontal vc-gif-folders-resize-handle-${edge}`;
             dialog.appendChild(handle);
 
-            let drag: { startY: number; startHeight: number; startGridMaxHeight: number; } | null = null;
+            let drag: { startY: number; startHeight: number; startGridMaxHeight: number; lastAppliedHeight: number; } | null = null;
             const onPointerDown = (e: PointerEvent) => {
                 e.preventDefault();
                 const grid = document.querySelector<HTMLElement>(".vc-gif-folders-grid");
+                const startHeight = dialog.getBoundingClientRect().height;
+                // grid.getBoundingClientRect().height is the OUTER (rendered)
+                // box height, but setGridMaxHeight sets a CONTENT-box
+                // max-height (grid is confirmed content-box - see
+                // computeAvailableGridContentHeight's own comment) - so
+                // subtract the grid's own padding to get a value that
+                // actually matches what setGridMaxHeight expects, the same
+                // way computeAvailableGridContentHeight already does. See
+                // INVESTIGATION.md Part 28: left as a known, deliberately
+                // unfixed ~28px (padding-sized) error since Part 20 - small
+                // enough to go unnoticed against a normal drag's much
+                // bigger changes, but stark and constant for the entire
+                // hold in the "already at the height limit, still holding
+                // the handle" case, where nothing else masks it - it grows
+                // the grid's clientHeight by that same ~28px the instant
+                // ANY drag starts, which forces the browser to clamp
+                // scrollTop down by the same amount if scrolled near the
+                // bottom (visible as content shifting down the screen, "as
+                // if scrolled up slightly") and grows the scrollbar thumb
+                // slightly too (proportional to clientHeight/scrollHeight) -
+                // one root cause behind two separately-reported symptoms.
+                let startGridMaxHeight = GRID_DEFAULT_MAX_HEIGHT_PX;
+                if (grid) {
+                    const gridStyles = getComputedStyle(grid);
+                    const verticalPadding = (parseFloat(gridStyles.paddingTop) || 0) + (parseFloat(gridStyles.paddingBottom) || 0);
+                    startGridMaxHeight = grid.getBoundingClientRect().height - verticalPadding;
+                }
                 drag = {
                     startY: e.clientY,
-                    startHeight: dialog.getBoundingClientRect().height,
-                    startGridMaxHeight: grid?.getBoundingClientRect().height ?? GRID_DEFAULT_MAX_HEIGHT_PX
+                    startHeight,
+                    startGridMaxHeight,
+                    lastAppliedHeight: startHeight
                 };
                 handle.setPointerCapture(e.pointerId);
             };
@@ -3415,11 +3857,51 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
                 const dy = e.clientY - drag.startY;
                 const delta = edge === "bottom" ? dy : -dy;
                 const newHeight = Math.max(MIN_MODAL_HEIGHT_PX, Math.min(window.innerHeight * 0.92, drag.startHeight + delta));
-                setDialogHeight(dialog, Math.round(newHeight));
-                setGridMaxHeight(drag.startGridMaxHeight + delta);
+                const rounded = Math.round(newHeight);
+                setDialogHeight(dialog, rounded);
+                // appliedDelta (how much the dialog actually moved, after the
+                // MIN_MODAL_HEIGHT_PX/0.92-of-viewport clamp above) rather
+                // than the raw, unclamped `delta` (how far the cursor itself
+                // moved) - see INVESTIGATION.md Part 24. Dragging past
+                // either end of that clamp used to keep growing/shrinking
+                // the grid's own live-tracked height using the cursor's raw
+                // distance even once the dialog itself had stopped moving,
+                // so the grid would end up taller than contentWrapper could
+                // actually show - a transient version of the same clipping
+                // this file has been chasing since Part 20, visible only
+                // while still holding the drag past the limit (settleGridHeight
+                // on release always corrected it, which is why letting go
+                // fixed it).
+                const appliedDelta = rounded - drag.startHeight;
+                drag.lastAppliedHeight = rounded;
+                // Same-frame approximate tracking during the drag itself,
+                // for smoothness (avoids a getBoundingClientRect()
+                // forced-reflow on every pointermove tick of a fast drag) -
+                // see INVESTIGATION.md Part 20 for why this formula alone is
+                // only ever approximate. settleGridHeight corrects this to
+                // an exact value once, on release, below - not live during
+                // the drag itself, since it needs a moment to settle (see
+                // its own comment).
+                //
+                // Deliberately no scroll-position bookkeeping here either
+                // (INVESTIGATION.md Part 27) - settleGridHeight captures
+                // scrollTop once, at its own start (i.e. right when the
+                // drag ends), and restores it once at the very end. That
+                // doesn't protect against *this* live tracking itself
+                // clamping scrollTop sometime during the drag, before
+                // settleGridHeight ever runs - a known, accepted gap (see
+                // Part 27's own notes) rather than something this line
+                // could fix by also reading scrollTop on every tick, since
+                // that would just be the same per-tick forced-reflow cost
+                // this comment already avoids above.
+                setGridMaxHeight(drag.startGridMaxHeight + appliedDelta);
             };
             const onPointerUp = () => {
-                if (drag) void persistRememberedHeight(Math.round(dialog.getBoundingClientRect().height));
+                if (drag) {
+                    void persistRememberedHeight(drag.lastAppliedHeight);
+                    pendingSettleCancel?.();
+                    pendingSettleCancel = settleGridHeight(dialog, drag.lastAppliedHeight);
+                }
                 drag = null;
             };
 
@@ -3433,6 +3915,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
                 handle.remove();
             });
         }
+        cleanups.push(() => pendingSettleCancel?.());
 
         return () => {
             cleanups.forEach(fn => fn());
