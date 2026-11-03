@@ -21,6 +21,8 @@ Minor bugs exist, but they are not very annoying and i hope i'll eventually fix 
 Also very rarely, when you save a gif/image/mp4 to a folder, discord crashes. I suspect it's some memory issue but this is happening around once a week so it's a non-issue for most people.
 <img width="1763" height="101" alt="image" src="https://github.com/user-attachments/assets/2f671851-9fc4-4be0-a553-2af7b03e5666" />
 <img width="1706" height="1263" alt="image" src="https://github.com/user-attachments/assets/9312ce12-6ee8-4511-804a-0ef885a72249" />
-<img width="423" height="501" alt="image" src="https://github.com/user-attachments/assets/7622fb21-db0a-4c9c-81e1-5f0efe96a74f" />
+<img width="602" height="412" alt="image" src="https://github.com/user-attachments/assets/aafcd67c-9a01-4313-ad49-ce1b6b82841b" />
 <img width="803" height="543" alt="image" src="https://github.com/user-attachments/assets/33058997-f0db-41a0-b7ca-b6fba4866f1d" />
 <img width="438" height="1262" alt="image" src="https://github.com/user-attachments/assets/49b076d5-d610-4524-8fdd-8a9c2f851a43" />
+
+
