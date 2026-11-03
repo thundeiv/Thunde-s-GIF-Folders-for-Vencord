@@ -4,52 +4,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import { app, dialog, BrowserWindow } from "electron";
+import { BrowserWindow, dialog } from "electron";
 import fs from "fs/promises";
-import { appendFileSync } from "fs";
 import path from "path";
 
 import http from "http";
 import https from "https";
 
 const MAX_BYTES = 20 * 1024 * 1024; // matches the sanity guard in index.tsx
+// Bigger files can be downloaded just to make a smaller copy of them (never cached)
+const MAX_BYTES_FOR_COMPRESSION = 200 * 1024 * 1024;
 const TIMEOUT_MS = 15000;
 const MAX_REDIRECTS = 5;
 
-// ---------- Crash-safe diagnostic logging ----------
-//
-// Temporary instrumentation for the still-unconfirmed main-process crash
-// documented in INVESTIGATION.md (Parts 3-4). An uncaught exception in this
-// file's raw http callbacks can kill the whole Electron main process before
-// any of the plugin's own error handling ever gets a chance to run - so if
-// that happens again, there's nothing else that writes it down anywhere.
-// console.error alone isn't enough here: this is the main process, not the
-// renderer, so nothing shows up in Discord's own DevTools console during a
-// normal installed session. Writing synchronously to a file is the only way
-// to guarantee the message survives a process that's about to die.
-//
-// This is a safety net for diagnosis, not a fix, and it's intentionally
-// broad - every uncaught exception in the main process, not just this
-// plugin's own code - since narrowing it down before a real stack trace is
-// in hand risks missing whatever the next occurrence actually turns out to
-// be. Worth removing (or narrowing to specific spots) once this has either
-// confirmed a cause or gone quiet for a good while.
-function logCrash(kind: string, err: unknown) {
-    try {
-        const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-        const logPath = path.join(app.getPath("userData"), "gif-folders-crash.log");
-        appendFileSync(logPath, `[${new Date().toISOString()}] ${kind}: ${detail}\n\n`);
-    } catch {
-        // If even this fails, there's genuinely nothing left to do - the
-        // process is already on its way down.
-    }
-}
-
-process.on("uncaughtException", err => logCrash("uncaughtException", err));
-process.on("unhandledRejection", err => logCrash("unhandledRejection", err));
-
 interface DownloadResult {
-    base64: string;
+    // Sent to the renderer as raw bytes - Electron's IPC copies typed arrays directly,
+    // which avoids the 33% size overhead and two full conversions base64 cost
+    bytes: Uint8Array;
     mimeType: string;
 }
 
@@ -63,11 +34,12 @@ interface DownloadResult {
  * displaying the live link) if this isn't available or fails, so nothing depends on
  * this working.
  */
-export function downloadMedia(_event: unknown, url: string): Promise<DownloadResult | null> {
-    return downloadWithRedirects(url, 0);
+export function downloadMedia(_event: unknown, url: string, maxBytes?: number): Promise<DownloadResult | null> {
+    const limit = typeof maxBytes === "number" && maxBytes > 0 ? Math.min(maxBytes, MAX_BYTES_FOR_COMPRESSION) : MAX_BYTES;
+    return downloadWithRedirects(url, 0, limit);
 }
 
-function downloadWithRedirects(url: string, redirectCount: number): Promise<DownloadResult | null> {
+function downloadWithRedirects(url: string, redirectCount: number, limit: number): Promise<DownloadResult | null> {
     return new Promise(resolve => {
         let target: URL;
         try {
@@ -113,7 +85,7 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
                         }
                         const nextUrl = new URL(res.headers.location, target).toString();
                         handedOff = true;
-                        downloadWithRedirects(nextUrl, redirectCount + 1).then(resolve);
+                        downloadWithRedirects(nextUrl, redirectCount + 1, limit).then(resolve);
                         return;
                     }
 
@@ -137,7 +109,7 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
                         // investigation that found this, following on from Part 4.)
                         try {
                             total += chunk.length;
-                            if (total > MAX_BYTES) {
+                            if (total > limit) {
                                 tooBig = true;
                                 req.destroy();
                                 return;
@@ -158,7 +130,11 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
                         try {
                             const buffer = Buffer.concat(chunks);
                             const mimeType = res.headers["content-type"]?.split(";")[0]?.trim() || "application/octet-stream";
-                            resolve({ base64: buffer.toString("base64"), mimeType });
+                            // A plain, exactly-sized Uint8Array (not a Buffer, which can be a
+                            // view into a larger shared pool) so only this file crosses IPC
+                            const bytes = new Uint8Array(buffer.length);
+                            bytes.set(buffer);
+                            resolve({ bytes, mimeType });
                         } catch {
                             resolve(null);
                         }
@@ -194,7 +170,10 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
 interface ExportBatchItem {
     dirName: string;
     filename: string;
-    base64: string;
+    /** The file itself (since 3 Nov 2026) - Electron IPC copies typed arrays directly */
+    bytes?: Uint8Array;
+    /** Older renderer versions sent base64 instead */
+    base64?: string;
 }
 interface ExportResult {
     written: number;
@@ -264,7 +243,10 @@ export async function exportGifFileBatch(_event: unknown, basePath: string, item
                 madeDirs.add(folderPath);
             }
             const filename = sanitizeName(item.filename);
-            const buffer = Buffer.from(item.base64, "base64");
+            const buffer = item.bytes
+                ? Buffer.from(item.bytes.buffer, item.bytes.byteOffset, item.bytes.byteLength)
+                : Buffer.from(item.base64 ?? "", "base64");
+            if (buffer.length === 0) throw new Error("empty file");
             await fs.writeFile(path.join(folderPath, filename), buffer);
             written++;
         } catch {
