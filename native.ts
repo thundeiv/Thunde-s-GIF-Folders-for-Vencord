@@ -82,6 +82,9 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
         }
 
         const client = target.protocol === "https:" ? https : http;
+        // Set once a redirect hands this download off to a follow-up request, so the
+        // 'close' safety net below doesn't resolve null while that request is running.
+        let handedOff = false;
         const req = client.get(
             target,
             {
@@ -109,6 +112,7 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
                             return;
                         }
                         const nextUrl = new URL(res.headers.location, target).toString();
+                        handedOff = true;
                         downloadWithRedirects(nextUrl, redirectCount + 1).then(resolve);
                         return;
                     }
@@ -167,6 +171,13 @@ function downloadWithRedirects(url: string, redirectCount: number): Promise<Down
         );
 
         req.on("error", () => resolve(null));
+        // Safety net: if the request is torn down without 'end' or 'error' ever
+        // firing (e.g. destroyed by the size limit or the timeout below), make sure
+        // the promise still settles instead of leaving the caller waiting forever.
+        // Harmless after a successful download - a promise only settles once.
+        req.on("close", () => {
+            if (!handedOff) resolve(null);
+        });
         // destroy() is documented not to throw in normal operation, but this was the
         // last remaining unguarded exit path in this function - guarding it costs
         // nothing and closes the gap completely.
@@ -268,7 +279,14 @@ export async function exportGifFileBatch(_event: unknown, basePath: string, item
  * strictest common case; macOS/Linux tolerate most of these, but there's no harm
  * in being conservative everywhere. */
 function sanitizeName(name: string): string {
-    const cleaned = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim();
-    return cleaned.length > 0 ? cleaned.slice(0, 200) : "unnamed";
+    let cleaned = name.replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim()
+        // Windows silently strips trailing dots/spaces, which can make two names collide
+        .replace(/[. ]+$/, "")
+        .slice(0, 200);
+    // "." / ".." would point at the export folder itself or its parent, and these
+    // device names can't be used as file names on Windows at all
+    if (!cleaned || /^\.+$/.test(cleaned)) return "unnamed";
+    if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(cleaned)) cleaned = "_" + cleaned;
+    return cleaned;
 }
 

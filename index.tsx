@@ -11,7 +11,9 @@ import { findGroupChildrenByChildId, NavContextMenuPatchCallback } from "@api/Co
 import * as DataStore from "@api/DataStore";
 import { definePluginSettings } from "@api/Settings";
 import { Button } from "@components/Button";
+import { Heading } from "@components/Heading";
 import { DeleteIcon, FolderIcon, MainSettingsIcon, OpenExternalIcon, PlusIcon } from "@components/Icons";
+import { Paragraph } from "@components/Paragraph";
 import { IS_MAC } from "@utils/constants";
 import { getCurrentChannel, insertTextIntoChatInputBox, sendMessage } from "@utils/discord";
 import { Logger } from "@utils/Logger";
@@ -21,7 +23,6 @@ import { findByPropsLazy } from "@webpack";
 import {
     ConfirmModal,
     ContextMenuApi,
-    Forms,
     FluxDispatcher,
     Menu,
     Modal,
@@ -31,7 +32,6 @@ import {
     showToast,
     Slider,
     TextInput,
-    Toasts,
     useState
 } from "@webpack/common";
 
@@ -429,7 +429,7 @@ async function persist() {
         await DataStore.set(DATA_KEY, cache);
     } catch (e) {
         logger.error("Failed to save GIF folders to DataStore", e);
-        showToast("Couldn't save GIF folders — see console for details", Toasts.Type.FAILURE);
+        showToast({ text: "Couldn't save GIF folders — see console for details", variant: "critical" });
     }
     notify();
 }
@@ -594,7 +594,7 @@ async function deleteFolder(name: string) {
 async function saveGifToFolder(folder: string, shareSrc: string, mediaSrc?: string) {
     if (!cache[folder]) cache[folder] = [];
     if (cache[folder].some(g => g.shareSrc === shareSrc)) {
-        showToast(`Already in "${folder}"`, Toasts.Type.MESSAGE);
+        showToast({ text: `Already in "${folder}"`, variant: "default" });
         return;
     }
     const resolvedMediaSrc = mediaSrc ?? shareSrc;
@@ -607,7 +607,7 @@ async function saveGifToFolder(folder: string, shareSrc: string, mediaSrc?: stri
     };
     cache[folder].unshift(entry);
     await persist();
-    showToast(`Saved GIF to "${folder}"`, Toasts.Type.SUCCESS);
+    showToast({ text: `Saved GIF to "${folder}"`, variant: "success" });
     // Warm the cache right away so it's instant next time the folder is opened.
     cacheGif(resolvedMediaSrc);
 }
@@ -616,7 +616,7 @@ async function removeGifFromFolder(folder: string, id: string) {
     if (!cache[folder]) return;
     cache[folder] = cache[folder].filter(g => g.id !== id);
     await persist();
-    showToast(`Removed GIF from "${folder}"`, Toasts.Type.MESSAGE);
+    showToast({ text: `Removed GIF from "${folder}"`, variant: "default" });
 }
 
 async function renameGifEntry(folder: string, id: string, newName: string) {
@@ -692,7 +692,7 @@ async function moveGifToFront(folder: string, id: string) {
     const [item] = list.splice(idx, 1);
     list.unshift(item);
     await persist();
-    showToast(`Moved to the front of "${folder}"`, Toasts.Type.SUCCESS);
+    showToast({ text: `Moved to the front of "${folder}"`, variant: "success" });
 }
 
 async function moveGifToBack(folder: string, id: string) {
@@ -703,7 +703,7 @@ async function moveGifToBack(folder: string, id: string) {
     const [item] = list.splice(idx, 1);
     list.push(item);
     await persist();
-    showToast(`Moved to the back of "${folder}"`, Toasts.Type.SUCCESS);
+    showToast({ text: `Moved to the back of "${folder}"`, variant: "success" });
 }
 
 /**
@@ -722,14 +722,14 @@ async function moveGifToFolder(fromFolder: string, toFolder: string, id: string)
 
     if (!cache[toFolder]) cache[toFolder] = [];
     if (cache[toFolder].some(g => g.shareSrc === list[idx].shareSrc)) {
-        showToast(`Already in "${toFolder}"`, Toasts.Type.MESSAGE);
+        showToast({ text: `Already in "${toFolder}"`, variant: "default" });
         return;
     }
 
     const [item] = list.splice(idx, 1);
     cache[toFolder].unshift(item);
     await persist();
-    showToast(`Moved to "${toFolder}"`, Toasts.Type.SUCCESS);
+    showToast({ text: `Moved to "${toFolder}"`, variant: "success" });
 }
 
 function searchAllFolders(query: string): Array<{ folder: string; entry: GifEntry; }> {
@@ -1136,7 +1136,10 @@ function getCacheEntry(mediaSrc: string): MediaCacheEntry | null {
 // treat a restart as a fresh, independently-decoded resource rather than reattaching
 // to whatever frame an animation that already finished its native loop count was
 // left on - reusing the same blob: URL string (as before) doesn't reliably do that.
-const blobUrlCache = new Map<string, { tick: number; url: string; }>();
+// The Blob is kept alongside its URL so a restart (new tick) only has to mint a new
+// URL for the same bytes, instead of base64-decoding the whole file again every few
+// seconds for every visible GIF that doesn't loop forever.
+const blobUrlCache = new Map<string, { tick: number; url: string; blob: Blob; }>();
 
 function dataUrlToBlob(dataUrl: string): Blob | null {
     try {
@@ -1178,12 +1181,12 @@ function getPlayableSrc(mediaSrc: string, tick: number): string | null {
     const existing = blobUrlCache.get(key);
     if (existing && existing.tick === tick) return existing.url;
 
-    const blob = dataUrlToBlob(cached.dataUrl);
+    const blob = existing?.blob ?? dataUrlToBlob(cached.dataUrl);
     if (!blob) return cached.dataUrl; // conversion failed - data: URI is still better than nothing
 
     if (existing) URL.revokeObjectURL(existing.url);
     const blobUrl = URL.createObjectURL(blob);
-    blobUrlCache.set(key, { tick, url: blobUrl });
+    blobUrlCache.set(key, { tick, url: blobUrl, blob });
     return blobUrl;
 }
 
@@ -1512,7 +1515,7 @@ async function clearMediaCache() {
     mediaCache = {};
     await deleteMediaCacheEntries(keys);
     notify();
-    showToast("Cleared local GIF cache", Toasts.Type.MESSAGE);
+    showToast({ text: "Cleared local GIF cache", variant: "default" });
 }
 
 function getMediaCacheSizeLabel(): string {
@@ -1720,17 +1723,17 @@ async function importFromJson(text: string) {
     try {
         parsed = JSON.parse(text);
     } catch {
-        showToast("That file isn't a valid GIF Folders export", Toasts.Type.FAILURE);
+        showToast({ text: "That file isn't a valid GIF Folders export", variant: "critical" });
         return;
     }
 
     if (typeof parsed !== "object" || parsed === null) {
-        showToast("That file isn't a valid GIF Folders export", Toasts.Type.FAILURE);
+        showToast({ text: "That file isn't a valid GIF Folders export", variant: "critical" });
         return;
     }
     const folders = (parsed as Record<string, unknown>).folders;
     if (!folders || typeof folders !== "object") {
-        showToast("That file isn't a valid GIF Folders export", Toasts.Type.FAILURE);
+        showToast({ text: "That file isn't a valid GIF Folders export", variant: "critical" });
         return;
     }
 
@@ -1782,7 +1785,7 @@ async function importFromJson(text: string) {
     await persist();
     if (cachedFromPackKeys.length > 0) await persistMediaCacheEntries(cachedFromPackKeys);
 
-    showToast(`Imported ${importedGifs} GIF(s) into ${touchedFolders} folder(s)`, Toasts.Type.SUCCESS);
+    showToast({ text: `Imported ${importedGifs} GIF(s) into ${touchedFolders} folder(s)`, variant: "success" });
 }
 
 // ---------- Confirmation modals ----------
@@ -1861,7 +1864,7 @@ function TextPromptModal({ modalProps, title, initial, placeholder, submitLabel,
             ]}
         >
             <div>
-                <Forms.FormTitle tag="h5">{title}</Forms.FormTitle>
+                <Heading tag="h5" defaultColor={false} style={{ color: "var(--text-strong)", lineHeight: "20px", marginBottom: 8 }}>{title}</Heading>
                 <TextInput
                     value={value}
                     onChange={(v: string) => { setValue(v); setError(""); }}
@@ -1870,7 +1873,7 @@ function TextPromptModal({ modalProps, title, initial, placeholder, submitLabel,
                     onKeyDown={(e: React.KeyboardEvent) => { if (e.key === "Enter") submit(); }}
                 />
                 {error && (
-                    <Forms.FormText style={{ color: "var(--text-danger)", marginTop: 8 }}>{error}</Forms.FormText>
+                    <Paragraph style={{ color: "var(--text-feedback-critical, var(--text-danger))", marginTop: 8 }}>{error}</Paragraph>
                 )}
             </div>
         </Modal>
@@ -2774,7 +2777,7 @@ function GifFoldersSettingsMenu() {
                     const next = !s.enableCache;
                     s.enableCache = next;
                     if (!next && Object.keys(mediaCache).length > 0) {
-                        showToast('Cache disabled. Use "Clear Cache" to free up existing space.', Toasts.Type.MESSAGE);
+                        showToast({ text: 'Cache disabled. Use "Clear Cache" to free up existing space.', variant: "default" });
                     }
                 }}
             />
@@ -3377,7 +3380,7 @@ function GifTile({ folder, entry, onInsert, folderBadge, reorderable, isDragging
                     label="Insert into Chat Box"
                     action={() => {
                         insertTextIntoChatInputBox(entry.shareSrc + " ");
-                        showToast("Inserted into chat box", Toasts.Type.SUCCESS);
+                        showToast({ text: "Inserted into chat box", variant: "success" });
                     }}
                 />
                 <Menu.MenuItem
@@ -3385,7 +3388,7 @@ function GifTile({ folder, entry, onInsert, folderBadge, reorderable, isDragging
                     label="Copy Link"
                     action={() => {
                         navigator.clipboard?.writeText(entry.shareSrc);
-                        showToast("Copied link to clipboard", Toasts.Type.SUCCESS);
+                        showToast({ text: "Copied link to clipboard", variant: "success" });
                     }}
                 />
                 <Menu.MenuItem
@@ -4166,7 +4169,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
     function insert(entry: GifEntry, instant = false) {
         const channel = getCurrentChannel();
         if (!channel) {
-            showToast("Couldn't find the current channel", Toasts.Type.FAILURE);
+            showToast({ text: "Couldn't find the current channel", variant: "critical" });
             return;
         }
 
@@ -4220,7 +4223,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
                     body: { content: entry.shareSrc, message_reference: replyReference, allowed_mentions: allowedMentions }
                 }).then(clearPendingReply).catch(e => {
                     logger.error("Couldn't send reply", e);
-                    showToast("Couldn't send GIF - see console for details", Toasts.Type.FAILURE);
+                    showToast({ text: "Couldn't send GIF - see console for details", variant: "critical" });
                 });
             } else {
                 // Always (re)send the original share link, never the internally-
@@ -4249,7 +4252,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
             // Modifier-click: leave the window open so several GIFs can be fired off
             // in a row. There's no modal-close here to act as "yep, that sent", so
             // toast instead.
-            showToast("Sent to chat", Toasts.Type.SUCCESS);
+            showToast({ text: "Sent to chat", variant: "success" });
             return;
         }
         modalProps.onClose();
@@ -4271,13 +4274,13 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
             // Desktop-only: writing real files and showing a native folder picker
             // both need the main-process access native.ts provides, which the
             // web/browser build doesn't have at all.
-            showToast("This needs the desktop app - not available here", Toasts.Type.FAILURE);
+            showToast({ text: "This needs the desktop app - not available here", variant: "critical" });
             return;
         }
 
         const totalCount = getFolderNames().reduce((sum, name) => sum + (cache[name]?.length ?? 0), 0);
         if (totalCount === 0) {
-            showToast("No GIFs saved yet", Toasts.Type.FAILURE);
+            showToast({ text: "No GIFs saved yet", variant: "critical" });
             return;
         }
 
@@ -4295,10 +4298,10 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
         try {
             const result = await exportAllFoldersToDisk(basePath, (done, total) => setExportProgress({ done, total }));
             const skippedNote = result.skipped > 0 ? ` (${result.skipped} skipped - dead links or download failures)` : "";
-            showToast(`Exported ${result.written} GIF(s) to ${basePath}${skippedNote}`, Toasts.Type.SUCCESS);
+            showToast({ text: `Exported ${result.written} GIF(s) to ${basePath}${skippedNote}`, variant: "success" });
         } catch (e) {
             logger.error("Export to disk failed", e);
-            showToast("Couldn't export - see console for details", Toasts.Type.FAILURE);
+            showToast({ text: "Couldn't export - see console for details", variant: "critical" });
         } finally {
             setIsExporting(false);
             setExportProgress(null);
@@ -4327,9 +4330,9 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
             {!showingSearchView && (
                 <div className="vc-gif-folders-tabs">
                     {folderNames.length === 0 && (
-                        <Forms.FormText style={{ margin: "16px 0" }}>
+                        <Paragraph style={{ margin: "16px 0" }}>
                             No folders yet. Create one to start saving GIFs.
-                        </Forms.FormText>
+                        </Paragraph>
                     )}
                     {folderNames.map(name => (
                         <div
@@ -4351,7 +4354,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
             )}
 
             <div className="vc-gif-folders-toolbar">
-                <Forms.FormText style={{ flexGrow: 1, opacity: 0.7 }}>
+                <Paragraph style={{ flexGrow: 1, opacity: 0.7 }}>
                     {isSearching && (
                         debouncedQuery !== trimmedQuery
                             ? "Searching\u2026"
@@ -4359,7 +4362,7 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
                                 ? `${allSearchResults.length} result(s) for "${debouncedQuery}" - showing first ${searchResults.length}, refine your search to narrow it down`
                                 : `${allSearchResults.length} result(s) for "${debouncedQuery}"`
                     )}
-                </Forms.FormText>
+                </Paragraph>
                 <input
                     ref={fileInputRef}
                     type="file"
@@ -4430,9 +4433,9 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
 
             {showingSearchView ? (
                 searchResults.length === 0 ? (
-                    <Forms.FormText style={EMPTY_STATE_TEXT_STYLE}>
+                    <Paragraph style={EMPTY_STATE_TEXT_STYLE}>
                         No GIFs match "{debouncedQuery}". Try renaming a GIF so it's easier to find later.
-                    </Forms.FormText>
+                    </Paragraph>
                 ) : (
                     <div className={gridClassName} style={gridStyle}>
                         {searchResults.map(({ folder, entry }) => (
@@ -4443,10 +4446,10 @@ function ManagerModal({ modalProps }: { modalProps: RenderModalProps; }) {
             ) : (
                 currentFolder && (
                     gifs.length === 0 ? (
-                        <Forms.FormText style={EMPTY_STATE_TEXT_STYLE}>
+                        <Paragraph style={EMPTY_STATE_TEXT_STYLE}>
                             No GIFs saved in "{currentFolder}" yet. Right click a GIF in chat and choose
                             "Save GIF to" → "{currentFolder}".
-                        </Forms.FormText>
+                        </Paragraph>
                     ) : (
                         <div className={gridClassName} style={gridStyle}>
                             {gifs.map(entry => (
@@ -4648,5 +4651,10 @@ export default definePlugin({
 
     stop() {
         removeChatBarButton("GifFolders");
+        // Free the in-memory copy of the media cache (it can be hundreds of MB) instead
+        // of holding it until Discord restarts. Only memory is dropped - nothing is
+        // deleted from storage, and start() loads it all back if the plugin is re-enabled.
+        for (const key of [...blobUrlCache.keys()]) releaseBlobUrl(key);
+        mediaCache = {};
     }
 });
