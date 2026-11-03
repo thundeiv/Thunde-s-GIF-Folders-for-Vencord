@@ -12,6 +12,7 @@ This is a plugin that exponentially improves on discord's native GIF saving syst
 - You can save any .gif file or .mp4 file (20mb limit) or image file in the folders to then use later.
 - You can HOLD CTRL+CLICK on a gif to send it without quitting the folder, so you can send multiple gifs in quick succession.
 - Hold-click on the window's edges to resize the window to your own desire
+- Right click on a GIF/Image/Video to compress it. Low and Best quality (slower) options available, from 90% to 10% of original size.
 
 I developed this using AI so i am not allowed to publish it to the original Vencord due to their rules, meaning that you'll have to manually install it. You can use chatgpt to help you with install instructions, it's pretty straight forward.
 I want to share this plugin with the world hoping that a really skilled developer will build it from scratch the right way to add it to the original vencord.
